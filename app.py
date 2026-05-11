@@ -3,16 +3,36 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import requests
 
 st.set_page_config(page_title="Undervalued Stock Screener", layout="wide")
 
 st.title("Undervalued Stock Screener")
 st.write(
-    "This app screens stocks using valuation, quality, and momentum metrics. "
+    "This app screens stocks using valuation, momentum, and risk metrics. "
     "It ranks companies based on a weighted attractiveness score."
 )
 
 default_tickers = "AAPL, MSFT, GOOGL, AMZN, META, NVDA, AMD, JPM, BAC, XOM, CVX, JNJ, PFE, KO, WMT, COST"
+
+sector_map = {
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "GOOGL": "Communication Services",
+    "AMZN": "Consumer Cyclical",
+    "META": "Communication Services",
+    "NVDA": "Technology",
+    "AMD": "Technology",
+    "JPM": "Financial Services",
+    "BAC": "Financial Services",
+    "XOM": "Energy",
+    "CVX": "Energy",
+    "JNJ": "Healthcare",
+    "PFE": "Healthcare",
+    "KO": "Consumer Defensive",
+    "WMT": "Consumer Defensive",
+    "COST": "Consumer Defensive",
+}
 
 tickers_input = st.text_area(
     "Enter stock tickers separated by commas:",
@@ -24,18 +44,18 @@ tickers = [ticker.strip().upper() for ticker in tickers_input.split(",") if tick
 st.sidebar.header("Scoring Weights")
 
 value_weight = st.sidebar.slider("Value Weight", 0.0, 1.0, 0.4, 0.05)
-quality_weight = st.sidebar.slider("Quality Weight", 0.0, 1.0, 0.4, 0.05)
-momentum_weight = st.sidebar.slider("Momentum Weight", 0.0, 1.0, 0.2, 0.05)
+momentum_weight = st.sidebar.slider("Momentum Weight", 0.0, 1.0, 0.35, 0.05)
+risk_weight = st.sidebar.slider("Risk Weight", 0.0, 1.0, 0.25, 0.05)
 
-total_weight = value_weight + quality_weight + momentum_weight
+total_weight = value_weight + momentum_weight + risk_weight
 
 if total_weight == 0:
     st.error("Total weight cannot be zero.")
     st.stop()
 
 value_weight = value_weight / total_weight
-quality_weight = quality_weight / total_weight
 momentum_weight = momentum_weight / total_weight
+risk_weight = risk_weight / total_weight
 
 
 def clean_number(x):
@@ -45,6 +65,50 @@ def clean_number(x):
         return float(x)
     except Exception:
         return np.nan
+
+
+@st.cache_data(show_spinner=False)
+def get_quote_data(tickers):
+    symbols = ",".join(tickers)
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbols}"
+
+    rows = []
+
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        results = data.get("quoteResponse", {}).get("result", [])
+
+        quote_dict = {item.get("symbol"): item for item in results}
+
+        for ticker in tickers:
+            item = quote_dict.get(ticker, {})
+
+            rows.append({
+                "Ticker": ticker,
+                "Company": item.get("shortName", ticker),
+                "Sector": sector_map.get(ticker, "Unknown"),
+                "Market Cap": clean_number(item.get("marketCap", np.nan)),
+                "Price": clean_number(item.get("regularMarketPrice", np.nan)),
+                "P/E": clean_number(item.get("trailingPE", np.nan)),
+                "Forward P/E": clean_number(item.get("forwardPE", np.nan)),
+                "P/B": clean_number(item.get("priceToBook", np.nan)),
+            })
+
+    except Exception:
+        for ticker in tickers:
+            rows.append({
+                "Ticker": ticker,
+                "Company": ticker,
+                "Sector": sector_map.get(ticker, "Unknown"),
+                "Market Cap": np.nan,
+                "Price": np.nan,
+                "P/E": np.nan,
+                "Forward P/E": np.nan,
+                "P/B": np.nan,
+            })
+
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner=False)
@@ -73,27 +137,44 @@ def get_price_metrics(tickers):
                 if len(prices) < 2:
                     one_year_return = np.nan
                     volatility = np.nan
+                    risk_adjusted_return = np.nan
+                    max_drawdown = np.nan
                     latest_price = np.nan
                 else:
                     latest_price = prices.iloc[-1]
                     first_price = prices.iloc[0]
+
                     one_year_return = (latest_price - first_price) / first_price
+
                     daily_returns = prices.pct_change().dropna()
                     volatility = daily_returns.std() * np.sqrt(252)
 
+                    if volatility == 0 or pd.isna(volatility):
+                        risk_adjusted_return = np.nan
+                    else:
+                        risk_adjusted_return = one_year_return / volatility
+
+                    rolling_max = prices.cummax()
+                    drawdowns = (prices - rolling_max) / rolling_max
+                    max_drawdown = drawdowns.min()
+
                 rows.append({
                     "Ticker": ticker,
-                    "Price": latest_price,
+                    "Price from History": latest_price,
                     "One Year Return": one_year_return,
-                    "Annualized Volatility": volatility
+                    "Annualized Volatility": volatility,
+                    "Risk-Adjusted Return": risk_adjusted_return,
+                    "Max Drawdown": max_drawdown
                 })
 
             except Exception:
                 rows.append({
                     "Ticker": ticker,
-                    "Price": np.nan,
+                    "Price from History": np.nan,
                     "One Year Return": np.nan,
-                    "Annualized Volatility": np.nan
+                    "Annualized Volatility": np.nan,
+                    "Risk-Adjusted Return": np.nan,
+                    "Max Drawdown": np.nan
                 })
 
         return pd.DataFrame(rows)
@@ -101,65 +182,12 @@ def get_price_metrics(tickers):
     except Exception:
         return pd.DataFrame({
             "Ticker": tickers,
-            "Price": np.nan,
+            "Price from History": np.nan,
             "One Year Return": np.nan,
-            "Annualized Volatility": np.nan
+            "Annualized Volatility": np.nan,
+            "Risk-Adjusted Return": np.nan,
+            "Max Drawdown": np.nan
         })
-
-
-@st.cache_data(show_spinner=False)
-def get_fundamental_metrics(tickers):
-    rows = []
-
-    for ticker in tickers:
-        company = np.nan
-        sector = "Unknown"
-        market_cap = np.nan
-        pe = np.nan
-        forward_pe = np.nan
-        ps = np.nan
-        pb = np.nan
-        profit_margin = np.nan
-        roe = np.nan
-        debt_to_equity = np.nan
-
-        try:
-            stock = yf.Ticker(ticker)
-
-            try:
-                info = stock.get_info()
-            except Exception:
-                info = stock.info
-
-            company = info.get("shortName", np.nan)
-            sector = info.get("sector", "Unknown")
-            market_cap = clean_number(info.get("marketCap", np.nan))
-            pe = clean_number(info.get("trailingPE", np.nan))
-            forward_pe = clean_number(info.get("forwardPE", np.nan))
-            ps = clean_number(info.get("priceToSalesTrailing12Months", np.nan))
-            pb = clean_number(info.get("priceToBook", np.nan))
-            profit_margin = clean_number(info.get("profitMargins", np.nan))
-            roe = clean_number(info.get("returnOnEquity", np.nan))
-            debt_to_equity = clean_number(info.get("debtToEquity", np.nan))
-
-        except Exception:
-            pass
-
-        rows.append({
-            "Ticker": ticker,
-            "Company": company,
-            "Sector": sector,
-            "Market Cap": market_cap,
-            "P/E": pe,
-            "Forward P/E": forward_pe,
-            "P/S": ps,
-            "P/B": pb,
-            "Profit Margin": profit_margin,
-            "ROE": roe,
-            "Debt to Equity": debt_to_equity
-        })
-
-    return pd.DataFrame(rows)
 
 
 def percentile_score(series, higher_is_better=True):
@@ -178,37 +206,45 @@ def percentile_score(series, higher_is_better=True):
 def calculate_scores(df):
     scored = df.copy()
 
-    for col in ["P/E", "Forward P/E", "P/S", "P/B", "Profit Margin", "ROE", "Debt to Equity", "One Year Return"]:
+    numeric_cols = [
+        "P/E",
+        "Forward P/E",
+        "P/B",
+        "One Year Return",
+        "Annualized Volatility",
+        "Risk-Adjusted Return",
+        "Max Drawdown"
+    ]
+
+    for col in numeric_cols:
         scored[col] = pd.to_numeric(scored[col], errors="coerce")
 
     scored.loc[scored["P/E"] <= 0, "P/E"] = np.nan
     scored.loc[scored["Forward P/E"] <= 0, "Forward P/E"] = np.nan
-    scored.loc[scored["P/S"] <= 0, "P/S"] = np.nan
     scored.loc[scored["P/B"] <= 0, "P/B"] = np.nan
 
     scored["P/E Score"] = percentile_score(scored["P/E"], higher_is_better=False)
     scored["Forward P/E Score"] = percentile_score(scored["Forward P/E"], higher_is_better=False)
-    scored["P/S Score"] = percentile_score(scored["P/S"], higher_is_better=False)
     scored["P/B Score"] = percentile_score(scored["P/B"], higher_is_better=False)
 
     scored["Value Score"] = scored[
-        ["P/E Score", "Forward P/E Score", "P/S Score", "P/B Score"]
-    ].mean(axis=1)
-
-    scored["Profit Margin Score"] = percentile_score(scored["Profit Margin"], higher_is_better=True)
-    scored["ROE Score"] = percentile_score(scored["ROE"], higher_is_better=True)
-    scored["Debt Score"] = percentile_score(scored["Debt to Equity"], higher_is_better=False)
-
-    scored["Quality Score"] = scored[
-        ["Profit Margin Score", "ROE Score", "Debt Score"]
+        ["P/E Score", "Forward P/E Score", "P/B Score"]
     ].mean(axis=1)
 
     scored["Momentum Score"] = percentile_score(scored["One Year Return"], higher_is_better=True)
 
+    scored["Risk-Adjusted Score"] = percentile_score(scored["Risk-Adjusted Return"], higher_is_better=True)
+    scored["Volatility Score"] = percentile_score(scored["Annualized Volatility"], higher_is_better=False)
+    scored["Drawdown Score"] = percentile_score(scored["Max Drawdown"], higher_is_better=True)
+
+    scored["Risk Score"] = scored[
+        ["Risk-Adjusted Score", "Volatility Score", "Drawdown Score"]
+    ].mean(axis=1)
+
     scored["Final Score"] = (
         value_weight * scored["Value Score"] +
-        quality_weight * scored["Quality Score"] +
-        momentum_weight * scored["Momentum Score"]
+        momentum_weight * scored["Momentum Score"] +
+        risk_weight * scored["Risk Score"]
     )
 
     scored["Final Score"] = scored["Final Score"].fillna(0)
@@ -218,7 +254,7 @@ def calculate_scores(df):
 
 def format_large_number(x):
     if pd.isna(x):
-        return np.nan
+        return "N/A"
     if x >= 1_000_000_000_000:
         return f"${x / 1_000_000_000_000:.2f}T"
     if x >= 1_000_000_000:
@@ -232,32 +268,19 @@ if st.button("Run Stock Screener"):
     if len(tickers) == 0:
         st.error("Please enter at least one ticker.")
     else:
-        with st.spinner("Pulling stock prices and financial data..."):
+        with st.spinner("Pulling stock data and calculating scores..."):
+            quote_df = get_quote_data(tickers)
             price_df = get_price_metrics(tickers)
-            fundamental_df = get_fundamental_metrics(tickers)
 
-            df = pd.merge(fundamental_df, price_df, on="Ticker", how="left")
+            df = pd.merge(quote_df, price_df, on="Ticker", how="left")
+
+            df["Price"] = df["Price"].fillna(df["Price from History"])
+
             scored_df = calculate_scores(df)
 
         st.success("Stock screener completed.")
 
         st.subheader("Ranked Stock Screener Results")
-
-        display_df = scored_df.copy()
-
-        percent_cols = [
-            "Profit Margin",
-            "ROE",
-            "One Year Return",
-            "Annualized Volatility",
-            "Value Score",
-            "Quality Score",
-            "Momentum Score",
-            "Final Score"
-        ]
-
-        for col in percent_cols:
-            display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
         display_cols = [
             "Ticker",
@@ -267,31 +290,21 @@ if st.button("Run Stock Screener"):
             "Price",
             "P/E",
             "Forward P/E",
-            "P/S",
             "P/B",
-            "Profit Margin",
-            "ROE",
-            "Debt to Equity",
             "One Year Return",
             "Annualized Volatility",
+            "Risk-Adjusted Return",
+            "Max Drawdown",
             "Value Score",
-            "Quality Score",
             "Momentum Score",
+            "Risk Score",
             "Final Score"
         ]
 
         st.dataframe(
-            display_df[display_cols],
+            scored_df[display_cols],
             use_container_width=True
         )
-
-        missing_count = scored_df["Company"].isna().sum()
-
-        if missing_count > 0:
-            st.warning(
-                f"{missing_count} ticker(s) returned limited company data from Yahoo Finance. "
-                "The app still uses available price and metric data where possible."
-            )
 
         top_stock = scored_df.iloc[0]
 
@@ -301,20 +314,16 @@ if st.button("Run Stock Screener"):
             f"**{top_stock['Ticker']}** ranks highest based on the selected scoring weights."
         )
 
-        st.write(
-            f"Final Score: **{top_stock['Final Score']:.2f}** | "
-            f"Value Score: **{top_stock['Value Score']:.2f}** | "
-            f"Quality Score: **{top_stock['Quality Score']:.2f}** | "
-            f"Momentum Score: **{top_stock['Momentum Score']:.2f}**"
-        )
-
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.metric("Top Stock", top_stock["Ticker"])
 
         with col2:
-            st.metric("P/E Ratio", "N/A" if pd.isna(top_stock["P/E"]) else f"{top_stock['P/E']:.2f}")
+            st.metric(
+                "Final Score",
+                f"{top_stock['Final Score']:.2f}"
+            )
 
         with col3:
             st.metric(
@@ -340,7 +349,7 @@ if st.button("Run Stock Screener"):
 
         st.plotly_chart(fig_score, use_container_width=True)
 
-        st.subheader("Value Score vs Quality Score")
+        st.subheader("Value Score vs Momentum Score")
 
         scatter_df = scored_df.copy()
         scatter_df["Market Cap"] = pd.to_numeric(scatter_df["Market Cap"], errors="coerce")
@@ -355,11 +364,11 @@ if st.button("Run Stock Screener"):
         fig_scatter = px.scatter(
             scatter_df,
             x="Value Score",
-            y="Quality Score",
+            y="Momentum Score",
             size="Market Cap Size",
             color="Sector",
             hover_name="Ticker",
-            title="Value Score vs Quality Score"
+            title="Value Score vs Momentum Score"
         )
 
         st.plotly_chart(fig_scatter, use_container_width=True)
@@ -379,9 +388,25 @@ if st.button("Run Stock Screener"):
 
         st.plotly_chart(fig_return, use_container_width=True)
 
+        st.subheader("Risk Comparison")
+
+        risk_df = scored_df.copy()
+        risk_df["Annualized Volatility Percent"] = risk_df["Annualized Volatility"] * 100
+        risk_df["Max Drawdown Percent"] = risk_df["Max Drawdown"] * 100
+
+        fig_vol = px.bar(
+            risk_df,
+            x="Ticker",
+            y="Annualized Volatility Percent",
+            color="Sector",
+            title="Annualized Volatility (%)"
+        )
+
+        st.plotly_chart(fig_vol, use_container_width=True)
+
         st.subheader("Valuation Multiples")
 
-        valuation_df = scored_df[["Ticker", "P/E", "Forward P/E", "P/S", "P/B"]].copy()
+        valuation_df = scored_df[["Ticker", "P/E", "Forward P/E", "P/B"]].copy()
         valuation_df = valuation_df.set_index("Ticker")
 
         fig_val = px.bar(
@@ -396,13 +421,17 @@ if st.button("Run Stock Screener"):
 
         st.write(
             "A higher final score means the stock ranked better relative to the other stocks in the sample. "
-            "The model rewards stocks with cheaper valuation ratios, stronger profitability/ROE, lower debt, "
-            "and better recent momentum."
+            "The model rewards cheaper valuation multiples, stronger recent momentum, and lower risk."
         )
 
         st.write(
             "This does not mean the top-ranked stock is guaranteed to be a good investment. "
             "The screener is best used as a first-pass filtering tool before deeper financial analysis."
+        )
+
+        st.warning(
+            "Note: Some fundamental Yahoo Finance fields may be unavailable on Streamlit Cloud. "
+            "The app handles this by still ranking stocks using available valuation, momentum, and risk data."
         )
 
         csv = scored_df.to_csv(index=False).encode("utf-8")
