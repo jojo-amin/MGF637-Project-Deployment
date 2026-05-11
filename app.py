@@ -34,6 +34,7 @@ value_weight = value_weight / total_weight
 quality_weight = quality_weight / total_weight
 momentum_weight = momentum_weight / total_weight
 
+
 @st.cache_data
 def get_stock_data(tickers):
     rows = []
@@ -42,7 +43,6 @@ def get_stock_data(tickers):
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
-
             hist = stock.history(period="1y")
 
             if hist.empty:
@@ -55,7 +55,7 @@ def get_stock_data(tickers):
             rows.append({
                 "Ticker": ticker,
                 "Company": info.get("shortName", np.nan),
-                "Sector": info.get("sector", np.nan),
+                "Sector": info.get("sector", "Unknown"),
                 "Market Cap": info.get("marketCap", np.nan),
                 "Price": info.get("currentPrice", np.nan),
                 "P/E": info.get("trailingPE", np.nan),
@@ -72,7 +72,7 @@ def get_stock_data(tickers):
             rows.append({
                 "Ticker": ticker,
                 "Company": np.nan,
-                "Sector": np.nan,
+                "Sector": "Unknown",
                 "Market Cap": np.nan,
                 "Price": np.nan,
                 "P/E": np.nan,
@@ -87,13 +87,16 @@ def get_stock_data(tickers):
 
     return pd.DataFrame(rows)
 
+
 def percentile_score(series, higher_is_better=True):
-    clean_series = series.replace([np.inf, -np.inf], np.nan)
+    clean_series = pd.to_numeric(series, errors="coerce")
+    clean_series = clean_series.replace([np.inf, -np.inf], np.nan)
 
     if higher_is_better:
         return clean_series.rank(pct=True) * 100
     else:
         return (1 - clean_series.rank(pct=True)) * 100
+
 
 def calculate_scores(df):
     scored = df.copy()
@@ -118,7 +121,13 @@ def calculate_scores(df):
         momentum_weight * scored["Momentum Score"]
     )
 
+    scored["Final Score"] = scored["Final Score"].fillna(0)
+    scored["Value Score"] = scored["Value Score"].fillna(0)
+    scored["Quality Score"] = scored["Quality Score"].fillna(0)
+    scored["Momentum Score"] = scored["Momentum Score"].fillna(0)
+
     return scored.sort_values("Final Score", ascending=False)
+
 
 if st.button("Run Stock Screener"):
     if len(tickers) == 0:
@@ -131,10 +140,22 @@ if st.button("Run Stock Screener"):
         st.subheader("Ranked Stock Screener Results")
 
         display_cols = [
-            "Ticker", "Company", "Sector", "Market Cap", "Price",
-            "P/E", "P/S", "P/B", "Profit Margin", "ROE",
-            "Debt to Equity", "One Year Return",
-            "Value Score", "Quality Score", "Momentum Score", "Final Score"
+            "Ticker",
+            "Company",
+            "Sector",
+            "Market Cap",
+            "Price",
+            "P/E",
+            "P/S",
+            "P/B",
+            "Profit Margin",
+            "ROE",
+            "Debt to Equity",
+            "One Year Return",
+            "Value Score",
+            "Quality Score",
+            "Momentum Score",
+            "Final Score"
         ]
 
         st.dataframe(
@@ -165,23 +186,46 @@ if st.button("Run Stock Screener"):
 
         st.plotly_chart(fig_score, use_container_width=True)
 
-st.subheader("Value vs Quality")
+        st.subheader("Value vs Quality")
 
-fig_scatter = px.scatter(
-    scored_df,
-    x="Value Score",
-    y="Quality Score",
-    size="Market Cap",
-    color="Sector",
-    hover_name="Ticker",
-    title="Value Score vs Quality Score"
-)
+        scatter_df = scored_df.copy()
 
-st.plotly_chart(fig_scatter, use_container_width=True)
+        scatter_df["Market Cap"] = pd.to_numeric(scatter_df["Market Cap"], errors="coerce")
+        market_cap_median = scatter_df["Market Cap"].median()
+
+        if pd.isna(market_cap_median):
+            scatter_df["Market Cap Size"] = 1
+        else:
+            scatter_df["Market Cap Size"] = scatter_df["Market Cap"].fillna(market_cap_median)
+
+        scatter_df["Market Cap Size"] = scatter_df["Market Cap Size"].replace(0, np.nan)
+
+        size_median = scatter_df["Market Cap Size"].median()
+
+        if pd.isna(size_median):
+            scatter_df["Market Cap Size"] = 1
+        else:
+            scatter_df["Market Cap Size"] = scatter_df["Market Cap Size"].fillna(size_median)
+
+        fig_scatter = px.scatter(
+            scatter_df,
+            x="Value Score",
+            y="Quality Score",
+            size="Market Cap Size",
+            color="Sector",
+            hover_name="Ticker",
+            title="Value Score vs Quality Score"
+        )
+
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
         st.subheader("Valuation Multiples")
 
-        valuation_df = scored_df[["Ticker", "P/E", "P/S", "P/B"]].set_index("Ticker")
+        valuation_df = scored_df[["Ticker", "P/E", "P/S", "P/B"]].copy()
+        valuation_df["P/E"] = pd.to_numeric(valuation_df["P/E"], errors="coerce")
+        valuation_df["P/S"] = pd.to_numeric(valuation_df["P/S"], errors="coerce")
+        valuation_df["P/B"] = pd.to_numeric(valuation_df["P/B"], errors="coerce")
+        valuation_df = valuation_df.set_index("Ticker")
 
         fig_val = px.bar(
             valuation_df,
