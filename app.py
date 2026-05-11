@@ -165,19 +165,19 @@ if st.button("Run Stock Screener"):
 
         st.plotly_chart(fig_score, use_container_width=True)
 
-        st.subheader("Value vs Quality")
+st.subheader("Value vs Quality")
 
-        fig_scatter = px.scatter(
-            scored_df,
-            x="Value Score",
-            y="Quality Score",
-            size="Market Cap",
-            color="Sector",
-            hover_name="Ticker",
-            title="Value Score vs Quality Score"
-        )
+fig_scatter = px.scatter(
+    scored_df,
+    x="Value Score",
+    y="Quality Score",
+    size="Market Cap",
+    color="Sector",
+    hover_name="Ticker",
+    title="Value Score vs Quality Score"
+)
 
-        st.plotly_chart(fig_scatter, use_container_width=True)
+st.plotly_chart(fig_scatter, use_container_width=True)
 
         st.subheader("Valuation Multiples")
 
